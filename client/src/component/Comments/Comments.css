@@ -1,0 +1,10 @@
+
+.allthreads{
+
+    display: flex ;
+    justify-content: space-around;
+   
+}
+.addsubcomment{
+    margin: 0 30px 0 10px;
+}
