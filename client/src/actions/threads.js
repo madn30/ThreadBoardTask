@@ -3,9 +3,10 @@ import * as api from '../api/index.js';
 
 export const getThreads = () => async (dispatch) => {
     try {
+        console.log("inside");
         const { data } = await api.fetchThreads();
-
         dispatch({ type: FETCH_ALL, payload: data });
+
     } catch (error) {
         console.log(error.message);
     }
@@ -30,10 +31,18 @@ export const createThread = (thread) => async (dispatch) => {
     }
 };
 
-export const updateComment = (id, comments) => async (dispatch) => {
+export const addComment = (id, comments) => async (dispatch) => {
     try {
-        console.log(id);
-        const { data } = await api.updateComment(id, comments);
+        const { data } = await api.addComment(id, comments);
+        dispatch({ type: UPDATE, payload: data });
+    } catch (error) {
+        console.log(error.message);
+    }
+};
+export const updateComment = (id, name) => async (dispatch) => {
+    try {
+
+        const { data } = await api.updateComment(id, name);
         dispatch({ type: UPDATE, payload: data });
     } catch (error) {
         console.log(error.message);

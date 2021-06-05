@@ -17,7 +17,6 @@ const getThread = async (req, res) => {
     const { id } = req.params;
     try {
         const post = await Threads.findOne({ "threads._id": id });
-        console.log(post);
         res.status(200).json(post);
     } catch (error) {
         res.status(404).json({ message: error.message });
@@ -25,7 +24,6 @@ const getThread = async (req, res) => {
 }
 
 const createThread = async (req, res) => {
-    console.log(req.body);
     const { namethread, color } = req.body;
     const newThread = new Threads({ namethread, color })
     try {
@@ -36,11 +34,10 @@ const createThread = async (req, res) => {
     }
 }
 
-const updateComment = async (req, res) => {
+const addComment = async (req, res) => {
     const { id } = req.params
     var thread
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(404).send(`No post with id: ${id}`);
-    // console.log(req.body);
     if (req.body.which === "threadcomment") {
         thread = await Threads.findOne({ _id: id })
         thread.comments.push(req.body)
@@ -49,11 +46,27 @@ const updateComment = async (req, res) => {
     }
     else if (req.body.which === "firstcomment") {
         thread = await Threads.findOne({ "comments._id": id })
-        console.log(id);
         thread.comments.map(e => e._id == id && e.firstcomments.push(req.body))
     }
     thread.save()
     res.json(thread);
 }
 
-module.exports = { router, getThreads, createThread, updateComment, getThread }
+const updateComment = async (req, res) => {
+    const { id } = req.params
+    const { index, name } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(404).send(`No post with id: ${id}`);
+
+    try {
+        const thread = await Threads.findOne({ _id: id })
+        thread.comments[index].namecomment = name
+        thread.save()
+        res.json(thread);
+    }
+    catch (error) {
+        res.status(409).json({ message: error.message });
+    }
+
+}
+
+module.exports = { router, getThreads, createThread, addComment, getThread, updateComment }

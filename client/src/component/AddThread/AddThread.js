@@ -13,16 +13,19 @@ function AddTread({ history }) {
     const dispatch = useDispatch();
 
     const Postthread = () => {
-        dispatch(createThread({ namethread, color: color.hex }));
-        history.push("/")
+        if (namethread.length) {
+            dispatch(createThread({ namethread, color: color.hex }));
+            history.push("/")
+        }
+        else alert("please insert name thread")
     }
 
     return (
-        <div className="container">
-            <div className="backarrow">
+        <div className="container_add">
+            <div className="backarrow_add">
                 <ArrowBackIos onClick={() => history.push("/")} className="backarrow" />
             </div>
-            <div className="addthread" style={{ filter: "invert(1)", backgroundColor: color.hex }}>
+            <div className="addthread" style={{ backgroundColor: color.hex }}>
                 <ColorLens onClick={() => setOpenColors(current => !current)} className="icon" />
                 {opencolors &&
                     <div className="colorpicker">

@@ -1,5 +1,5 @@
 
-.container{
+.container_add{
     position: fixed;
     top: 50%;
     left: 50%;
@@ -7,17 +7,19 @@
     border: solid gray;
     width: 80%;
     height: 80%;
-    border-radius: 20px;
+    border-radius: 5px;
+
+
 }
-.backarrow{
+.backarrow_add{
     /* margin-left: 10px; */
-    margin-top: 10px;
+    margin: 10px ;
     border-bottom:solid black 3px ;
+
 }
 .icon{
      margin-left: 10px; 
      cursor: pointer;
-     filter:invert(1)
 }
 .addthread{
   display: flex;

@@ -10,18 +10,6 @@ const ThreadsSchema = mongoose.Schema({
         firstcomments: [{
             colorcomment: String,
             namecomment: String,
-            secondcomments: [{
-                colorcomment: String,
-                namecomment: String,
-                thirdcomments: [{
-                    colorcomment: String,
-                    namecomment: String,
-                    fourthcomments: [{
-                        colorcomment: String,
-                        namecomment: String,
-                    }]
-                }]
-            }]
         }],
     }]
 })

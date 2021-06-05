@@ -12,6 +12,7 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
-.invertcolorbg{
-  filter: invert(1);
+.inherite{
+  -webkit-filter: invert(100%);
+  mix-blend-mode: difference;
 }

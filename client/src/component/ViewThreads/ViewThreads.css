@@ -1,0 +1,11 @@
+.viewcontainer:last-child{
+    border-radius: 10px 4px;
+}
+.allthreads_View{
+    display: flex ;
+    justify-content: space-around;
+   
+}
+.allthreads_View:last-child{
+border-radius: 0 0 10px 10px;
+}

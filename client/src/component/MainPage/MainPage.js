@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React from 'react'
 import "./MainPage.css"
 import { useSelector } from 'react-redux';
 import ViewThreads from "../ViewThreads/ViewThreads"
@@ -13,7 +13,7 @@ function MainPage({ history }) {
                     <span>Threads</span>
                 </div>
                 <div>
-                    <button onClick={() => history.push("/AddThread")}>+</button><br />
+                    <button onClick={() => history.push("/AddThread")}>+</button>
                 </div>
             </div>
 
