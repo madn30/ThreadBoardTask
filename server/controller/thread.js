@@ -25,8 +25,9 @@ const getThread = async (req, res) => {
 }
 
 const createThread = async (req, res) => {
-    const { namethread, color, childrens } = req.body;
-    const newThread = new Threads({ threads: [{ namethread, color, childrens }] })
+    console.log(req.body);
+    const { namethread, color } = req.body;
+    const newThread = new Threads({ namethread, color })
     try {
         await newThread.save();
         res.status(201).json(newThread);
@@ -37,9 +38,20 @@ const createThread = async (req, res) => {
 
 const updateComment = async (req, res) => {
     const { id } = req.params
+    var thread
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(404).send(`No post with id: ${id}`);
-    const thread = await Threads.findOne({ "threads._id": id })
-    thread.threads[0].comments.push(req.body)
+    // console.log(req.body);
+    if (req.body.which === "threadcomment") {
+        thread = await Threads.findOne({ _id: id })
+        thread.comments.push(req.body)
+
+
+    }
+    else if (req.body.which === "firstcomment") {
+        thread = await Threads.findOne({ "comments._id": id })
+        console.log(id);
+        thread.comments.map(e => e._id == id && e.firstcomments.push(req.body))
+    }
     thread.save()
     res.json(thread);
 }

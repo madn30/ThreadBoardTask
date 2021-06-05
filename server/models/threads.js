@@ -1,15 +1,28 @@
 const mongoose = require("mongoose")
 
 const ThreadsSchema = mongoose.Schema({
-    threads: [{
-        color: String,
-        namethread: String,
-        comments: [{
-            parentId: String,
+    color: String,
+    namethread: String,
+    comments: [{
+        parentId: String,
+        colorcomment: String,
+        namecomment: String,
+        firstcomments: [{
             colorcomment: String,
             namecomment: String,
-            subcomments: [String],
-        }]
+            secondcomments: [{
+                colorcomment: String,
+                namecomment: String,
+                thirdcomments: [{
+                    colorcomment: String,
+                    namecomment: String,
+                    fourthcomments: [{
+                        colorcomment: String,
+                        namecomment: String,
+                    }]
+                }]
+            }]
+        }],
     }]
 })
 
