@@ -1,374 +1,347 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Snake AI - Legendary Human (Can't Lose)</title>
+  <title>Snake God Mode - Legendary</title>
   <style>
-    html, body {
-      margin: 0;
-      width: 100%;
-      height: 100%;
-      background: #111;
-      overflow: hidden;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    html,body{margin:0;width:100%;height:100%;background:#050505;overflow:hidden;font-family:"Courier New", monospace;}
+    canvas{display:block;margin:0 auto;image-rendering:pixelated;}
+    .ui{
+      position:absolute; top:20px; left:20px;
+      background:rgba(10,10,10,0.85);
+      border-left:4px solid #00ff88;
+      padding:15px 25px; color:#fff; pointer-events:none;
+      backdrop-filter: blur(5px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      border-radius: 0 8px 8px 0;
     }
-    canvas {
-      display: block;
-      margin: 0 auto;
-      image-rendering: pixelated;
-    }
-    #ui {
-      position: absolute;
-      top: 10px; left: 10px;
-      background: rgba(0, 0, 0, 0.85);
-      color: #0f0;
-      padding: 10px 12px;
-      border: 1px solid rgba(0, 255, 0, 0.6);
-      z-index: 100;
-      pointer-events: none;
-      min-width: 220px;
-      line-height: 1.35;
-      box-shadow: 0 0 24px rgba(0, 255, 0, 0.08);
-    }
-    #ui .dim { color: rgba(0, 255, 0, 0.7); }
+    h2{margin:0 0 5px; font-size:18px; color:#00ff88; letter-spacing:2px;}
+    .stat{font-size:14px; color:#ccc; margin-top:4px;}
+    span{color:#fff; font-weight:bold;}
   </style>
 </head>
 <body>
-  <div id="ui">
-    <div><span class="dim">STATUS:</span> <span id="status">Booting...</span></div>
-    <div><span class="dim">MODE:</span> <span id="mode">LEGENDARY</span></div>
-    <div><span class="dim">SCORE:</span> <span id="score">0</span></div>
-    <div><span class="dim">BOARD:</span> <span id="board">-</span></div>
-  </div>
 
-  <canvas id="game"></canvas>
+<div class="ui">
+  <h2>LEGENDARY BOT</h2>
+  <div class="stat">Score: <span id="scoreVal">0</span></div>
+  <div class="stat">Mode: <span id="modeVal">BOOT</span></div>
+  <div class="stat">Board: <span id="boardVal">-</span></div>
+</div>
 
-  <script>
-  // --- CONFIGURATION ---
-  const TILE_SIZE = 25;
-  const SPEED = 25; // ms (lower is faster)
-  const HUMAN_JITTER = 0.15; // adds small randomness to avoid "same bot pattern"
-  const SHORTCUT_CHANCE = 0.65; // how often it tries safe shortcuts to food
+<canvas id="game"></canvas>
 
-  // --- SETUP ---
-  const canvas = document.getElementById("game");
-  const ctx = canvas.getContext("2d");
-  const uiStatus = document.getElementById("status");
-  const uiMode = document.getElementById("mode");
-  const uiScore = document.getElementById("score");
-  const uiBoard = document.getElementById("board");
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const uiScore = document.getElementById("scoreVal");
+const uiMode = document.getElementById("modeVal");
+const uiBoard = document.getElementById("boardVal");
 
-  let tilesX = 0, tilesY = 0;
-  let snake = [];
-  let food = { x: 0, y: 0 };
-  let score = 0;
-  let gameInterval;
+// --- FEEL (real snake game) ---
+const TILE = 25;
+const TICK_RATE = 20; // ms
 
-  // Hamiltonian cycle state (guarantees no-loss if followed)
-  let cycle = [];
-  let cycleIndex = new Map(); // "x,y" -> idx
-  let cycleLen = 0;
+// --- AI knobs (legendary + human-ish) ---
+const SOFT_RANDOM = 0.12;         // small randomness to avoid same pattern
+const SAFETY_SPACE_FACTOR = 0.65; // keep enough free space near head
+const GREED = 1.0;                // higher = more aggressive for food
 
-  function key(x, y) { return x + "," + y; }
-  function same(a, b) { return a && b && a.x === b.x && a.y === b.y; }
-  function manhattan(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
-  function inBounds(x, y) { return x >= 0 && y >= 0 && x < tilesX && y < tilesY; }
-  function cycleDist(fromIdx, toIdx) { return (toIdx - fromIdx + cycleLen) % cycleLen; }
+let tilesX = 0, tilesY = 0;
+let snake = []; // [{x,y}]
+let food = null;
+let score = 0;
 
-  function shuffle(arr) {
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
+function k(x,y){ return x + "," + y; }
+function inBounds(x,y){ return x>=0 && y>=0 && x<tilesX && y<tilesY; }
+
+function resize(){
+  const maxX = Math.floor(innerWidth / TILE);
+  const maxY = Math.floor(innerHeight / TILE);
+  tilesX = Math.max(10, maxX - (maxX % 2)); // even
+  tilesY = Math.max(10, maxY - (maxY % 2)); // even
+  canvas.width = tilesX * TILE;
+  canvas.height = tilesY * TILE;
+  uiBoard.innerText = tilesX + "×" + tilesY;
+}
+window.addEventListener("resize", () => { resize(); reset(); });
+resize();
+
+function reset(){
+  const mx = Math.floor(tilesX/2);
+  const my = Math.floor(tilesY/2);
+  snake = [{x:mx, y:my}, {x:mx, y:my+1}, {x:mx, y:my+2}];
+  score = 0;
+  uiScore.innerText = score;
+  spawnFood();
+  uiMode.innerText = "HUNTING";
+  uiMode.style.color = "#00ff88";
+}
+
+function spawnFood(){
+  // Win condition (filled board)
+  if (snake.length >= tilesX * tilesY) {
+    uiMode.innerText = "LEGENDARY WIN";
+    uiMode.style.color = "#00e5ff";
+    return;
   }
 
-  // Build a Hamiltonian CYCLE for even width or even height rectangular grids.
-  // We enforce even dimensions in init() to make this always possible.
-  function buildHamiltonianCycle(w, h) {
-    if (w < 2 || h < 2) return [];
+  let valid = false;
+  let tries = 0;
+  while(!valid && tries < 5000){
+    food = { x: (Math.random()*tilesX)|0, y: (Math.random()*tilesY)|0 };
+    valid = !snake.some(s => s.x === food.x && s.y === food.y);
+    tries++;
+  }
+}
 
-    // Case A: even width (standard construction)
-    if (w % 2 === 0) {
-      const path = [];
-      // Down the first column
-      for (let y = 0; y < h; y++) path.push({ x: 0, y });
-      // Snake through remaining columns while moving upward
-      for (let y = h - 1; y >= 0; y--) {
-        const leftToRight = ((h - 1 - y) % 2 === 0);
-        if (leftToRight) {
-          for (let x = 1; x < w; x++) path.push({ x, y });
-        } else {
-          for (let x = w - 1; x >= 1; x--) path.push({ x, y });
-        }
-      }
-      return path; // last cell is (1,0), adjacent to (0,0) => cycle
+// --- BFS utilities (fast + stable) ---
+function bfsNextStep(start, target, blockedSet){
+  // Returns next step {x,y} on shortest path, or null.
+  const qx = new Int32Array(tilesX * tilesY);
+  const qy = new Int32Array(tilesX * tilesY);
+  let qh = 0, qt = 0;
+
+  const visited = new Int8Array(tilesX * tilesY);
+  const parent = new Int32Array(tilesX * tilesY);
+  parent.fill(-1);
+
+  const sid = start.y * tilesX + start.x;
+  visited[sid] = 1;
+  qx[qt] = start.x; qy[qt] = start.y; qt++;
+
+  const dirs = [
+    [0,-1],[0,1],[-1,0],[1,0]
+  ];
+
+  while(qh < qt){
+    const cx = qx[qh], cy = qy[qh]; qh++;
+    if (cx === target.x && cy === target.y) break;
+
+    // light shuffle for "human" look
+    if (Math.random() < 0.25) dirs.reverse();
+
+    for (let i=0;i<4;i++){
+      const nx = cx + dirs[i][0];
+      const ny = cy + dirs[i][1];
+      if (!inBounds(nx,ny)) continue;
+      const id = ny * tilesX + nx;
+      if (visited[id]) continue;
+      if (blockedSet.has(k(nx,ny))) continue;
+      visited[id] = 1;
+      parent[id] = cy * tilesX + cx;
+      qx[qt] = nx; qy[qt] = ny; qt++;
     }
-
-    // Case B: even height (transpose-style construction)
-    if (h % 2 === 0) {
-      const path = [];
-      // Right across the first row
-      for (let x = 0; x < w; x++) path.push({ x, y: 0 });
-      // Snake through remaining rows while moving leftward
-      for (let x = w - 1; x >= 0; x--) {
-        const topToBottom = ((w - 1 - x) % 2 === 0);
-        if (topToBottom) {
-          for (let y = 1; y < h; y++) path.push({ x, y });
-        } else {
-          for (let y = h - 1; y >= 1; y--) path.push({ x, y });
-        }
-      }
-      return path; // last cell is (0,1), adjacent to (0,0) => cycle
-    }
-
-    // No cycle possible on odd x odd
-    return [];
   }
 
-  function rebuildCycle() {
-    cycle = buildHamiltonianCycle(tilesX, tilesY);
-    if (!cycle.length) throw new Error("Failed to build Hamiltonian cycle");
+  const tid = target.y * tilesX + target.x;
+  if (!visited[tid]) return null;
 
-    // Randomize "style" so it doesn't look like the same bot every run.
-    // Mirroring doesn't break adjacency.
-    if (Math.random() < 0.5) cycle = cycle.map(p => ({ x: (tilesX - 1) - p.x, y: p.y }));
-    if (Math.random() < 0.5) cycle = cycle.map(p => ({ x: p.x, y: (tilesY - 1) - p.y }));
-    if (Math.random() < 0.5) cycle = cycle.slice().reverse();
+  // walk back from target to start to get the next step
+  let cur = tid;
+  let prev = parent[cur];
+  while (prev !== -1 && prev !== (start.y * tilesX + start.x)) {
+    cur = prev;
+    prev = parent[cur];
+  }
+  const nx = cur % tilesX;
+  const ny = (cur / tilesX) | 0;
+  return {x:nx, y:ny};
+}
 
-    // Rotate start near the center (more "human" than always starting at corner)
-    const cx = (tilesX - 1) / 2;
-    const cy = (tilesY - 1) / 2;
-    const candidates = [];
-    for (let i = 0; i < cycle.length; i++) {
-      const p = cycle[i];
-      const d = Math.abs(p.x - cx) + Math.abs(p.y - cy);
-      if (d <= Math.max(2, Math.floor((tilesX + tilesY) / 10))) candidates.push(i);
+function floodFillCount(start, blockedSet){
+  // Counts reachable free cells from start (including start if free).
+  const qx = new Int32Array(tilesX * tilesY);
+  const qy = new Int32Array(tilesX * tilesY);
+  let qh = 0, qt = 0;
+  const visited = new Int8Array(tilesX * tilesY);
+
+  const sid = start.y * tilesX + start.x;
+  if (blockedSet.has(k(start.x,start.y))) return 0;
+  visited[sid] = 1;
+  qx[qt] = start.x; qy[qt] = start.y; qt++;
+  let count = 0;
+
+  const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
+  while(qh < qt){
+    const cx = qx[qh], cy = qy[qh]; qh++;
+    count++;
+    for (let i=0;i<4;i++){
+      const nx = cx + dirs[i][0];
+      const ny = cy + dirs[i][1];
+      if (!inBounds(nx,ny)) continue;
+      const id = ny * tilesX + nx;
+      if (visited[id]) continue;
+      if (blockedSet.has(k(nx,ny))) continue;
+      visited[id] = 1;
+      qx[qt] = nx; qy[qt] = ny; qt++;
     }
-    const offset = candidates.length
-      ? candidates[Math.floor(Math.random() * candidates.length)]
-      : Math.floor(Math.random() * cycle.length);
-    cycle = cycle.slice(offset).concat(cycle.slice(0, offset));
+  }
+  return count;
+}
 
-    cycleIndex = new Map();
-    for (let i = 0; i < cycle.length; i++) cycleIndex.set(key(cycle[i].x, cycle[i].y), i);
-    cycleLen = cycle.length;
+function think(){
+  if (!food) return null;
+  if (snake.length >= tilesX * tilesY) return null;
+
+  const head = snake[0];
+  const tail = snake[snake.length - 1];
+  const dirs = [
+    {x:0,y:-1},
+    {x:0,y:1},
+    {x:-1,y:0},
+    {x:1,y:0},
+  ];
+
+  // Precompute body sets for collision checks
+  const bodySet = new Set(snake.map(s => k(s.x,s.y)));
+
+  // Candidate evaluation with full safety simulation
+  let best = null;
+  let bestScore = -Infinity;
+
+  for (const d of dirs){
+    const nx = head.x + d.x;
+    const ny = head.y + d.y;
+    if (!inBounds(nx,ny)) continue;
+
+    const willEat = (nx === food.x && ny === food.y);
+
+    // collision: allow stepping onto current tail ONLY if not eating (tail moves away)
+    const hits = bodySet.has(k(nx,ny)) && !( !willEat && nx === tail.x && ny === tail.y );
+    if (hits) continue;
+
+    // Build virtual snake after move
+    const vSnake = [{x:nx,y:ny}, ...snake];
+    if (!willEat) vSnake.pop();
+
+    const vHead = vSnake[0];
+    const vTail = vSnake[vSnake.length - 1];
+
+    // Blocked for path checks = body excluding tail (tail is reachable because it moves)
+    const blocked = new Set(vSnake.slice(0, vSnake.length - 1).map(s => k(s.x,s.y)));
+
+    // Safety 1: must have an escape path to tail (prevents dead-ends)
+    const escapeStep = bfsNextStep(vHead, vTail, blocked);
+    if (!escapeStep && vSnake.length > 4) continue;
+
+    // Safety 2: flood-fill space must be "enough" near head
+    const freeSpace = floodFillCount(vHead, blocked);
+    const needSpace = Math.max(10, Math.floor(vSnake.length * SAFETY_SPACE_FACTOR));
+    if (freeSpace < needSpace) continue;
+
+    // Aggression: prefer moves that shorten path to food, but only if safe
+    const blockedForFood = new Set(vSnake.slice(0, vSnake.length - 1).map(s => k(s.x,s.y)));
+    const toFoodStep = bfsNextStep(vHead, food, blockedForFood);
+
+    // Scoring
+    const distFood = Math.abs(vHead.x - food.x) + Math.abs(vHead.y - food.y);
+    const distTail = Math.abs(vHead.x - vTail.x) + Math.abs(vHead.y - vTail.y);
+    let s = 0;
+    if (willEat) s += 100000;
+    if (toFoodStep) s += 2500 * GREED;
+    s += (freeSpace * 3);
+    s -= distFood * (12 * GREED);
+    s += distTail * 0.25; // slight bias to keep tail accessible
+    s += (Math.random() - 0.5) * (SOFT_RANDOM * 100); // human-like jitter
+
+    if (s > bestScore) {
+      bestScore = s;
+      best = {x:nx, y:ny, willEat, hasFoodPath: !!toFoodStep};
+    }
   }
 
-  function init() {
-    // Force an even grid so the "can't lose" cycle always exists.
-    const maxTilesX = Math.floor(window.innerWidth / TILE_SIZE);
-    const maxTilesY = Math.floor(window.innerHeight / TILE_SIZE);
-    tilesX = Math.max(8, maxTilesX - (maxTilesX % 2)); // even
-    tilesY = Math.max(8, maxTilesY - (maxTilesY % 2)); // even
+  if (best) {
+    uiMode.innerText = best.willEat ? "FINISHING" : (best.hasFoodPath ? "HUNTING" : "CONTROL");
+    uiMode.style.color = best.willEat ? "#00e5ff" : (best.hasFoodPath ? "#00ff88" : "#ffd000");
+    return {x:best.x, y:best.y};
+  }
 
-    canvas.width = tilesX * TILE_SIZE;
-    canvas.height = tilesY * TILE_SIZE;
-    uiBoard.innerText = tilesX + "×" + tilesY;
+  // No "perfect" candidate found: pick any legal move that maximizes space (no-death fallback)
+  uiMode.innerText = "SURVIVAL";
+  uiMode.style.color = "#ff0055";
 
-    rebuildCycle();
+  let fallback = null;
+  let fbScore = -Infinity;
+  for (const d of dirs){
+    const nx = head.x + d.x;
+    const ny = head.y + d.y;
+    if (!inBounds(nx,ny)) continue;
+    const willEat = (nx === food.x && ny === food.y);
+    const hits = bodySet.has(k(nx,ny)) && !( !willEat && nx === tail.x && ny === tail.y );
+    if (hits) continue;
 
-    // Start as a contiguous segment on the cycle (guarantees safety from frame 1).
-    const head = cycle[0];
-    const prev1 = cycle[(cycleLen - 1) % cycleLen];
-    const prev2 = cycle[(cycleLen - 2) % cycleLen];
-    snake = [head, prev1, prev2];
+    const vSnake = [{x:nx,y:ny}, ...snake];
+    if (!willEat) vSnake.pop();
+    const blocked = new Set(vSnake.slice(0, vSnake.length - 1).map(s => k(s.x,s.y)));
+    const freeSpace = floodFillCount(vSnake[0], blocked);
+    const escapeStep = bfsNextStep(vSnake[0], vSnake[vSnake.length-1], blocked);
+    let s = freeSpace + (escapeStep ? 500 : 0) + (willEat ? 2000 : 0);
+    s += (Math.random() - 0.5) * 5;
+    if (s > fbScore) { fbScore = s; fallback = {x:nx,y:ny}; }
+  }
+  return fallback;
+}
 
-    score = 0;
+function update(){
+  // if won, stop moving
+  if (snake.length >= tilesX * tilesY) return;
+
+  const next = think();
+  if (!next) { reset(); return; }
+
+  snake.unshift(next);
+  if (next.x === food.x && next.y === food.y) {
+    score++;
     uiScore.innerText = score;
-    uiMode.innerText = "LEGENDARY (Human-ish)";
-    uiStatus.innerText = "ACTIVE";
-    uiStatus.style.color = "#0f0";
-
     spawnFood();
-
-    clearInterval(gameInterval);
-    gameInterval = setInterval(update, SPEED);
-    draw();
+  } else {
+    snake.pop();
   }
+}
 
-  window.addEventListener("resize", init);
+function draw(){
+  ctx.fillStyle = "#050505";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  function spawnFood() {
-    // If full board: win.
-    if (snake.length >= tilesX * tilesY) {
-      uiStatus.innerText = "LEGENDARY WIN (Board Filled)";
-      uiStatus.style.color = "#00e5ff";
-      clearInterval(gameInterval);
-      return;
-    }
-
-    let valid = false;
-    let attempts = 0;
-    while (!valid && attempts < 500) {
-      food = {
-        x: Math.floor(Math.random() * tilesX),
-        y: Math.floor(Math.random() * tilesY),
-      };
-      valid = !snake.some(s => s.x === food.x && s.y === food.y);
-      attempts++;
-    }
-
-    // Fallback (should be extremely rare)
-    if (!valid) {
-      for (let y = 0; y < tilesY && !valid; y++) {
-        for (let x = 0; x < tilesX && !valid; x++) {
-          if (!snake.some(s => s.x === x && s.y === y)) {
-            food = { x, y };
-            valid = true;
-          }
-        }
-      }
-    }
-  }
-
-  // Legendary "can't lose" move selection:
-  // - Base guarantee: follow the Hamiltonian cycle (never traps itself).
-  // - Human-like: randomized safe shortcuts that still preserve safety.
-  function getLegendaryMove() {
-    const head = snake[0];
-    const tail = snake[snake.length - 1];
-
-    const headIdx = cycleIndex.get(key(head.x, head.y));
-    const tailIdx = cycleIndex.get(key(tail.x, tail.y));
-    const foodIdx = cycleIndex.get(key(food.x, food.y));
-    if (headIdx == null || tailIdx == null || foodIdx == null) return null;
-
-    // If we follow the cycle, the snake occupies a contiguous segment behind head.
-    // The "free interval" (safe to enter) is forward from head until (and including) tail.
-    function inForwardInterval(candidateIdx) {
-      const dToCand = cycleDist(headIdx, candidateIdx);
-      const dToTail = cycleDist(headIdx, tailIdx);
-      return dToCand > 0 && dToCand <= dToTail;
-    }
-
-    const dirs = shuffle([
-      { x: 0, y: -1 },
-      { x: 0, y: 1 },
-      { x: -1, y: 0 },
-      { x: 1, y: 0 },
-    ]);
-
-    const candidates = [];
-    for (const d of dirs) {
-      const nx = head.x + d.x;
-      const ny = head.y + d.y;
-      if (!inBounds(nx, ny)) continue;
-
-      const willEat = (nx === food.x && ny === food.y);
-      const hitsBody = snake.some((s, i) => {
-        // If not eating, tail moves, so stepping onto current tail is allowed.
-        if (!willEat && i === snake.length - 1) return false;
-        return s.x === nx && s.y === ny;
-      });
-      if (hitsBody) continue;
-
-      const idx = cycleIndex.get(key(nx, ny));
-      if (idx == null) continue;
-
-      candidates.push({ x: nx, y: ny, idx, willEat });
-    }
-
-    if (!candidates.length) return null;
-
-    // Default safe move: next on cycle
-    const nextOnCycle = cycle[(headIdx + 1) % cycleLen];
-
-    // Try safe shortcut moves (human-ish) most of the time
-    const tryShortcut = Math.random() < SHORTCUT_CHANCE;
-    if (tryShortcut) {
-      const safeShortcuts = candidates.filter(c => inForwardInterval(c.idx));
-      if (safeShortcuts.length) {
-        // Prefer moves that reduce cycle-distance to food, with slight randomness
-        safeShortcuts.sort((a, b) => {
-          const da = cycleDist(a.idx, foodIdx);
-          const db = cycleDist(b.idx, foodIdx);
-          const ha = manhattan(a, food);
-          const hb = manhattan(b, food);
-          const ja = (Math.random() - 0.5) * HUMAN_JITTER;
-          const jb = (Math.random() - 0.5) * HUMAN_JITTER;
-          return (da - db) + 0.15 * (ha - hb) + (ja - jb);
-        });
-
-        // Occasionally pick 2nd best to avoid robotic perfection
-        const pick =
-          safeShortcuts.length >= 3 && Math.random() < 0.20 ? safeShortcuts[1]
-          : safeShortcuts.length >= 2 && Math.random() < 0.12 ? safeShortcuts[1]
-          : safeShortcuts[0];
-
-        uiStatus.innerText = pick.willEat ? "LEGENDARY (FINISHING)" : "LEGENDARY (HUNTING)";
-        uiStatus.style.color = "#0f0";
-        return { x: pick.x, y: pick.y };
-      }
-    }
-
-    // If shortcut not taken/available, stick to the cycle (guaranteed survival)
-    const cycleMove = candidates.find(c => c.x === nextOnCycle.x && c.y === nextOnCycle.y);
-    if (cycleMove) {
-      uiStatus.innerText = "LEGENDARY (SAFE FLOW)";
-      uiStatus.style.color = "#00ff88";
-      return { x: nextOnCycle.x, y: nextOnCycle.y };
-    }
-
-    // Rare fallback (shouldn't happen if we stayed cycle-consistent): pick any legal move
-    uiStatus.innerText = "LEGENDARY (RECOVERING)";
-    uiStatus.style.color = "orange";
-    candidates.sort((a, b) => manhattan(a, food) - manhattan(b, food));
-    return { x: candidates[0].x, y: candidates[0].y };
-  }
-
-  function update() {
-    const nextMove = getLegendaryMove();
-    if (!nextMove) {
-      init();
-      return;
-    }
-
-    snake.unshift(nextMove);
-
-    // Eat food
-    if (same(nextMove, food)) {
-      score++;
-      uiScore.innerText = score;
-      spawnFood();
-    } else {
-      snake.pop();
-    }
-
-    draw();
-  }
-
-  function draw() {
-    // Clear
-    ctx.fillStyle = "#1b1b1b";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Food
+  // Food
+  if (food) {
     ctx.fillStyle = "#ff0055";
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = "#ff0055";
     ctx.beginPath();
-    ctx.arc(
-      food.x * TILE_SIZE + TILE_SIZE / 2,
-      food.y * TILE_SIZE + TILE_SIZE / 2,
-      TILE_SIZE / 2 - 2, 0, Math.PI * 2
-    );
+    ctx.arc(food.x*TILE + TILE/2, food.y*TILE + TILE/2, TILE/3, 0, Math.PI*2);
     ctx.fill();
-
-    // Snake
-    for (let i = 0; i < snake.length; i++) {
-      const segment = snake[i];
-      ctx.fillStyle = i === 0 ? "#ffffff" : "#00ff88";
-      ctx.fillRect(
-        segment.x * TILE_SIZE + 1,
-        segment.y * TILE_SIZE + 1,
-        TILE_SIZE - 2,
-        TILE_SIZE - 2
-      );
-    }
+    ctx.shadowBlur = 0;
   }
 
-  init();
-  </script>
+  // Snake
+  for (let i=0; i<snake.length; i++){
+    const s = snake[i];
+    const light = 50 - (i/snake.length)*30;
+    const color = i === 0 ? "#ffffff" : `hsl(150, 100%, ${light}%)`;
+    ctx.fillStyle = color;
+    if (i === 0) {
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = "#00ff88";
+    } else {
+      ctx.shadowBlur = 0;
+    }
+    ctx.fillRect(s.x*TILE + 1, s.y*TILE + 1, TILE - 2, TILE - 2);
+  }
+  ctx.shadowBlur = 0;
+}
+
+function loop(){
+  update();
+  draw();
+  setTimeout(() => requestAnimationFrame(loop), TICK_RATE);
+}
+
+reset();
+loop();
+</script>
 </body>
 </html>
 
