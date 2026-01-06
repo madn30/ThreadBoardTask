@@ -41,20 +41,36 @@ const uiBoard = document.getElementById("boardVal");
 
 // --- FEEL (real snake game) ---
 const TILE = 25;
-const TICK_RATE = 20; // ms
+// Smooth render is always 60fps; "human" speed is controlled by STEP_MS below.
 
 // --- AI knobs (legendary + human-ish) ---
 const SOFT_RANDOM = 0.12;         // small randomness to avoid same pattern
 const SAFETY_SPACE_FACTOR = 0.65; // keep enough free space near head
 const GREED = 1.0;                // higher = more aggressive for food
 
+// --- HUMAN SMOOTH SPEED ---
+const BASE_STEP_MS = 85;     // average time per tile
+const STEP_JITTER_MS = 18;   // random timing variation (human feel)
+const TURN_PENALTY_MS = 9;   // tiny hesitation on turns
+const EAT_PENALTY_MS = 22;   // tiny hesitation on eating
+const LENGTH_SLOWDOWN_MS = 28; // slows slightly as snake gets long
+
 let tilesX = 0, tilesY = 0;
 let snake = []; // [{x,y}]
+let prevSnake = []; // previous logic state for smooth interpolation
 let food = null;
 let score = 0;
 
+let stepMs = BASE_STEP_MS;
+let accumMs = 0;
+let lastFrameMs = 0;
+let lastMoveDir = {x: 0, y: -1};
+
 function k(x,y){ return x + "," + y; }
 function inBounds(x,y){ return x>=0 && y>=0 && x<tilesX && y<tilesY; }
+function lerp(a,b,t){ return a + (b-a) * t; }
+function clamp01(t){ return t < 0 ? 0 : (t > 1 ? 1 : t); }
+function randRange(min, max){ return min + Math.random() * (max - min); }
 
 function resize(){
   const maxX = Math.floor(innerWidth / TILE);
@@ -72,6 +88,11 @@ function reset(){
   const mx = Math.floor(tilesX/2);
   const my = Math.floor(tilesY/2);
   snake = [{x:mx, y:my}, {x:mx, y:my+1}, {x:mx, y:my+2}];
+  prevSnake = snake.map(s => ({x:s.x, y:s.y}));
+  lastMoveDir = {x: 0, y: -1};
+  stepMs = BASE_STEP_MS;
+  accumMs = 0;
+  lastFrameMs = 0;
   score = 0;
   uiScore.innerText = score;
   spawnFood();
@@ -284,24 +305,41 @@ function think(){
   return fallback;
 }
 
-function update(){
+function logicStep(){
   // if won, stop moving
   if (snake.length >= tilesX * tilesY) return;
+
+  prevSnake = snake.map(s => ({x:s.x, y:s.y}));
 
   const next = think();
   if (!next) { reset(); return; }
 
-  snake.unshift(next);
-  if (next.x === food.x && next.y === food.y) {
+  const head = prevSnake[0];
+  const moveDir = { x: next.x - head.x, y: next.y - head.y };
+  const turned = (moveDir.x !== lastMoveDir.x || moveDir.y !== lastMoveDir.y);
+
+  snake.unshift({x: next.x, y: next.y});
+  const ate = (food && next.x === food.x && next.y === food.y);
+  if (ate) {
     score++;
     uiScore.innerText = score;
     spawnFood();
   } else {
     snake.pop();
   }
+
+  lastMoveDir = moveDir;
+  const slowByLength = (snake.length / (tilesX * tilesY)) * LENGTH_SLOWDOWN_MS;
+  stepMs =
+    BASE_STEP_MS +
+    randRange(-STEP_JITTER_MS, STEP_JITTER_MS) +
+    (turned ? TURN_PENALTY_MS : 0) +
+    (ate ? EAT_PENALTY_MS : 0) +
+    slowByLength;
 }
 
-function draw(){
+function draw(alpha){
+  const t = clamp01(alpha);
   ctx.fillStyle = "#050505";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -318,7 +356,10 @@ function draw(){
 
   // Snake
   for (let i=0; i<snake.length; i++){
-    const s = snake[i];
+    const s1 = snake[i];
+    const s0 = prevSnake[i] || prevSnake[prevSnake.length - 1] || s1;
+    const fx = lerp(s0.x, s1.x, t);
+    const fy = lerp(s0.y, s1.y, t);
     const light = 50 - (i/snake.length)*30;
     const color = i === 0 ? "#ffffff" : `hsl(150, 100%, ${light}%)`;
     ctx.fillStyle = color;
@@ -328,19 +369,29 @@ function draw(){
     } else {
       ctx.shadowBlur = 0;
     }
-    ctx.fillRect(s.x*TILE + 1, s.y*TILE + 1, TILE - 2, TILE - 2);
+    ctx.fillRect(fx*TILE + 1, fy*TILE + 1, TILE - 2, TILE - 2);
   }
   ctx.shadowBlur = 0;
 }
 
-function loop(){
-  update();
-  draw();
-  setTimeout(() => requestAnimationFrame(loop), TICK_RATE);
+function frame(ts){
+  if (!lastFrameMs) lastFrameMs = ts;
+  const dt = Math.min(80, ts - lastFrameMs); // cap large tab-switch spikes
+  lastFrameMs = ts;
+  accumMs += dt;
+
+  while (accumMs >= stepMs) {
+    logicStep();
+    accumMs -= stepMs;
+  }
+
+  const alpha = stepMs > 0 ? (accumMs / stepMs) : 1;
+  draw(alpha);
+  requestAnimationFrame(frame);
 }
 
 reset();
-loop();
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
