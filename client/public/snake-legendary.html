@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Snake AI - Legendary Human (Can't Lose)</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #111;
+      overflow: hidden;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    canvas {
+      display: block;
+      margin: 0 auto;
+      image-rendering: pixelated;
+    }
+    #ui {
+      position: absolute;
+      top: 10px; left: 10px;
+      background: rgba(0, 0, 0, 0.85);
+      color: #0f0;
+      padding: 10px 12px;
+      border: 1px solid rgba(0, 255, 0, 0.6);
+      z-index: 100;
+      pointer-events: none;
+      min-width: 220px;
+      line-height: 1.35;
+      box-shadow: 0 0 24px rgba(0, 255, 0, 0.08);
+    }
+    #ui .dim { color: rgba(0, 255, 0, 0.7); }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div><span class="dim">STATUS:</span> <span id="status">Booting...</span></div>
+    <div><span class="dim">MODE:</span> <span id="mode">LEGENDARY</span></div>
+    <div><span class="dim">SCORE:</span> <span id="score">0</span></div>
+    <div><span class="dim">BOARD:</span> <span id="board">-</span></div>
+  </div>
+
+  <canvas id="game"></canvas>
+
+  <script>
+  // --- CONFIGURATION ---
+  const TILE_SIZE = 25;
+  const SPEED = 25; // ms (lower is faster)
+  const HUMAN_JITTER = 0.15; // adds small randomness to avoid "same bot pattern"
+  const SHORTCUT_CHANCE = 0.65; // how often it tries safe shortcuts to food
+
+  // --- SETUP ---
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const uiStatus = document.getElementById("status");
+  const uiMode = document.getElementById("mode");
+  const uiScore = document.getElementById("score");
+  const uiBoard = document.getElementById("board");
+
+  let tilesX = 0, tilesY = 0;
+  let snake = [];
+  let food = { x: 0, y: 0 };
+  let score = 0;
+  let gameInterval;
+
+  // Hamiltonian cycle state (guarantees no-loss if followed)
+  let cycle = [];
+  let cycleIndex = new Map(); // "x,y" -> idx
+  let cycleLen = 0;
+
+  function key(x, y) { return x + "," + y; }
+  function same(a, b) { return a && b && a.x === b.x && a.y === b.y; }
+  function manhattan(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
+  function inBounds(x, y) { return x >= 0 && y >= 0 && x < tilesX && y < tilesY; }
+  function cycleDist(fromIdx, toIdx) { return (toIdx - fromIdx + cycleLen) % cycleLen; }
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  // Build a Hamiltonian CYCLE for even width or even height rectangular grids.
+  // We enforce even dimensions in init() to make this always possible.
+  function buildHamiltonianCycle(w, h) {
+    if (w < 2 || h < 2) return [];
+
+    // Case A: even width (standard construction)
+    if (w % 2 === 0) {
+      const path = [];
+      // Down the first column
+      for (let y = 0; y < h; y++) path.push({ x: 0, y });
+      // Snake through remaining columns while moving upward
+      for (let y = h - 1; y >= 0; y--) {
+        const leftToRight = ((h - 1 - y) % 2 === 0);
+        if (leftToRight) {
+          for (let x = 1; x < w; x++) path.push({ x, y });
+        } else {
+          for (let x = w - 1; x >= 1; x--) path.push({ x, y });
+        }
+      }
+      return path; // last cell is (1,0), adjacent to (0,0) => cycle
+    }
+
+    // Case B: even height (transpose-style construction)
+    if (h % 2 === 0) {
+      const path = [];
+      // Right across the first row
+      for (let x = 0; x < w; x++) path.push({ x, y: 0 });
+      // Snake through remaining rows while moving leftward
+      for (let x = w - 1; x >= 0; x--) {
+        const topToBottom = ((w - 1 - x) % 2 === 0);
+        if (topToBottom) {
+          for (let y = 1; y < h; y++) path.push({ x, y });
+        } else {
+          for (let y = h - 1; y >= 1; y--) path.push({ x, y });
+        }
+      }
+      return path; // last cell is (0,1), adjacent to (0,0) => cycle
+    }
+
+    // No cycle possible on odd x odd
+    return [];
+  }
+
+  function rebuildCycle() {
+    cycle = buildHamiltonianCycle(tilesX, tilesY);
+    if (!cycle.length) throw new Error("Failed to build Hamiltonian cycle");
+
+    // Randomize "style" so it doesn't look like the same bot every run.
+    // Mirroring doesn't break adjacency.
+    if (Math.random() < 0.5) cycle = cycle.map(p => ({ x: (tilesX - 1) - p.x, y: p.y }));
+    if (Math.random() < 0.5) cycle = cycle.map(p => ({ x: p.x, y: (tilesY - 1) - p.y }));
+    if (Math.random() < 0.5) cycle = cycle.slice().reverse();
+
+    // Rotate start near the center (more "human" than always starting at corner)
+    const cx = (tilesX - 1) / 2;
+    const cy = (tilesY - 1) / 2;
+    const candidates = [];
+    for (let i = 0; i < cycle.length; i++) {
+      const p = cycle[i];
+      const d = Math.abs(p.x - cx) + Math.abs(p.y - cy);
+      if (d <= Math.max(2, Math.floor((tilesX + tilesY) / 10))) candidates.push(i);
+    }
+    const offset = candidates.length
+      ? candidates[Math.floor(Math.random() * candidates.length)]
+      : Math.floor(Math.random() * cycle.length);
+    cycle = cycle.slice(offset).concat(cycle.slice(0, offset));
+
+    cycleIndex = new Map();
+    for (let i = 0; i < cycle.length; i++) cycleIndex.set(key(cycle[i].x, cycle[i].y), i);
+    cycleLen = cycle.length;
+  }
+
+  function init() {
+    // Force an even grid so the "can't lose" cycle always exists.
+    const maxTilesX = Math.floor(window.innerWidth / TILE_SIZE);
+    const maxTilesY = Math.floor(window.innerHeight / TILE_SIZE);
+    tilesX = Math.max(8, maxTilesX - (maxTilesX % 2)); // even
+    tilesY = Math.max(8, maxTilesY - (maxTilesY % 2)); // even
+
+    canvas.width = tilesX * TILE_SIZE;
+    canvas.height = tilesY * TILE_SIZE;
+    uiBoard.innerText = tilesX + "×" + tilesY;
+
+    rebuildCycle();
+
+    // Start as a contiguous segment on the cycle (guarantees safety from frame 1).
+    const head = cycle[0];
+    const prev1 = cycle[(cycleLen - 1) % cycleLen];
+    const prev2 = cycle[(cycleLen - 2) % cycleLen];
+    snake = [head, prev1, prev2];
+
+    score = 0;
+    uiScore.innerText = score;
+    uiMode.innerText = "LEGENDARY (Human-ish)";
+    uiStatus.innerText = "ACTIVE";
+    uiStatus.style.color = "#0f0";
+
+    spawnFood();
+
+    clearInterval(gameInterval);
+    gameInterval = setInterval(update, SPEED);
+    draw();
+  }
+
+  window.addEventListener("resize", init);
+
+  function spawnFood() {
+    // If full board: win.
+    if (snake.length >= tilesX * tilesY) {
+      uiStatus.innerText = "LEGENDARY WIN (Board Filled)";
+      uiStatus.style.color = "#00e5ff";
+      clearInterval(gameInterval);
+      return;
+    }
+
+    let valid = false;
+    let attempts = 0;
+    while (!valid && attempts < 500) {
+      food = {
+        x: Math.floor(Math.random() * tilesX),
+        y: Math.floor(Math.random() * tilesY),
+      };
+      valid = !snake.some(s => s.x === food.x && s.y === food.y);
+      attempts++;
+    }
+
+    // Fallback (should be extremely rare)
+    if (!valid) {
+      for (let y = 0; y < tilesY && !valid; y++) {
+        for (let x = 0; x < tilesX && !valid; x++) {
+          if (!snake.some(s => s.x === x && s.y === y)) {
+            food = { x, y };
+            valid = true;
+          }
+        }
+      }
+    }
+  }
+
+  // Legendary "can't lose" move selection:
+  // - Base guarantee: follow the Hamiltonian cycle (never traps itself).
+  // - Human-like: randomized safe shortcuts that still preserve safety.
+  function getLegendaryMove() {
+    const head = snake[0];
+    const tail = snake[snake.length - 1];
+
+    const headIdx = cycleIndex.get(key(head.x, head.y));
+    const tailIdx = cycleIndex.get(key(tail.x, tail.y));
+    const foodIdx = cycleIndex.get(key(food.x, food.y));
+    if (headIdx == null || tailIdx == null || foodIdx == null) return null;
+
+    // If we follow the cycle, the snake occupies a contiguous segment behind head.
+    // The "free interval" (safe to enter) is forward from head until (and including) tail.
+    function inForwardInterval(candidateIdx) {
+      const dToCand = cycleDist(headIdx, candidateIdx);
+      const dToTail = cycleDist(headIdx, tailIdx);
+      return dToCand > 0 && dToCand <= dToTail;
+    }
+
+    const dirs = shuffle([
+      { x: 0, y: -1 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 },
+      { x: 1, y: 0 },
+    ]);
+
+    const candidates = [];
+    for (const d of dirs) {
+      const nx = head.x + d.x;
+      const ny = head.y + d.y;
+      if (!inBounds(nx, ny)) continue;
+
+      const willEat = (nx === food.x && ny === food.y);
+      const hitsBody = snake.some((s, i) => {
+        // If not eating, tail moves, so stepping onto current tail is allowed.
+        if (!willEat && i === snake.length - 1) return false;
+        return s.x === nx && s.y === ny;
+      });
+      if (hitsBody) continue;
+
+      const idx = cycleIndex.get(key(nx, ny));
+      if (idx == null) continue;
+
+      candidates.push({ x: nx, y: ny, idx, willEat });
+    }
+
+    if (!candidates.length) return null;
+
+    // Default safe move: next on cycle
+    const nextOnCycle = cycle[(headIdx + 1) % cycleLen];
+
+    // Try safe shortcut moves (human-ish) most of the time
+    const tryShortcut = Math.random() < SHORTCUT_CHANCE;
+    if (tryShortcut) {
+      const safeShortcuts = candidates.filter(c => inForwardInterval(c.idx));
+      if (safeShortcuts.length) {
+        // Prefer moves that reduce cycle-distance to food, with slight randomness
+        safeShortcuts.sort((a, b) => {
+          const da = cycleDist(a.idx, foodIdx);
+          const db = cycleDist(b.idx, foodIdx);
+          const ha = manhattan(a, food);
+          const hb = manhattan(b, food);
+          const ja = (Math.random() - 0.5) * HUMAN_JITTER;
+          const jb = (Math.random() - 0.5) * HUMAN_JITTER;
+          return (da - db) + 0.15 * (ha - hb) + (ja - jb);
+        });
+
+        // Occasionally pick 2nd best to avoid robotic perfection
+        const pick =
+          safeShortcuts.length >= 3 && Math.random() < 0.20 ? safeShortcuts[1]
+          : safeShortcuts.length >= 2 && Math.random() < 0.12 ? safeShortcuts[1]
+          : safeShortcuts[0];
+
+        uiStatus.innerText = pick.willEat ? "LEGENDARY (FINISHING)" : "LEGENDARY (HUNTING)";
+        uiStatus.style.color = "#0f0";
+        return { x: pick.x, y: pick.y };
+      }
+    }
+
+    // If shortcut not taken/available, stick to the cycle (guaranteed survival)
+    const cycleMove = candidates.find(c => c.x === nextOnCycle.x && c.y === nextOnCycle.y);
+    if (cycleMove) {
+      uiStatus.innerText = "LEGENDARY (SAFE FLOW)";
+      uiStatus.style.color = "#00ff88";
+      return { x: nextOnCycle.x, y: nextOnCycle.y };
+    }
+
+    // Rare fallback (shouldn't happen if we stayed cycle-consistent): pick any legal move
+    uiStatus.innerText = "LEGENDARY (RECOVERING)";
+    uiStatus.style.color = "orange";
+    candidates.sort((a, b) => manhattan(a, food) - manhattan(b, food));
+    return { x: candidates[0].x, y: candidates[0].y };
+  }
+
+  function update() {
+    const nextMove = getLegendaryMove();
+    if (!nextMove) {
+      init();
+      return;
+    }
+
+    snake.unshift(nextMove);
+
+    // Eat food
+    if (same(nextMove, food)) {
+      score++;
+      uiScore.innerText = score;
+      spawnFood();
+    } else {
+      snake.pop();
+    }
+
+    draw();
+  }
+
+  function draw() {
+    // Clear
+    ctx.fillStyle = "#1b1b1b";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Food
+    ctx.fillStyle = "#ff0055";
+    ctx.beginPath();
+    ctx.arc(
+      food.x * TILE_SIZE + TILE_SIZE / 2,
+      food.y * TILE_SIZE + TILE_SIZE / 2,
+      TILE_SIZE / 2 - 2, 0, Math.PI * 2
+    );
+    ctx.fill();
+
+    // Snake
+    for (let i = 0; i < snake.length; i++) {
+      const segment = snake[i];
+      ctx.fillStyle = i === 0 ? "#ffffff" : "#00ff88";
+      ctx.fillRect(
+        segment.x * TILE_SIZE + 1,
+        segment.y * TILE_SIZE + 1,
+        TILE_SIZE - 2,
+        TILE_SIZE - 2
+      );
+    }
+  }
+
+  init();
+  </script>
+</body>
+</html>
+
