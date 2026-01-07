@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Snake God Mode - Legendary</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;background:#050505;overflow:hidden;font-family:"Courier New", monospace;}
+    canvas{display:block;margin:0 auto;image-rendering:pixelated;}
+    .ui{
+      position:absolute; top:20px; left:20px;
+      background:rgba(10,10,10,0.85);
+      border-left:4px solid #00ff88;
+      padding:15px 25px; color:#fff; pointer-events:none;
+      backdrop-filter: blur(5px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      border-radius: 0 8px 8px 0;
+    }
+    h2{margin:0 0 5px; font-size:18px; color:#00ff88; letter-spacing:2px;}
+    .stat{font-size:14px; color:#ccc; margin-top:4px;}
+    span{color:#fff; font-weight:bold;}
+  </style>
+</head>
+<body>
+
+<div class="ui">
+  <h2>LEGENDARY BOT</h2>
+  <div class="stat">Score: <span id="scoreVal">0</span></div>
+  <div class="stat">Mode: <span id="modeVal">BOOT</span></div>
+  <div class="stat">Board: <span id="boardVal">-</span></div>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const uiScore = document.getElementById("scoreVal");
+const uiMode = document.getElementById("modeVal");
+const uiBoard = document.getElementById("boardVal");
+
+// --- FEEL (real snake game) ---
+const TILE = 25;
+// Smooth render is always 60fps; "human" speed is controlled by STEP_MS below.
+
+// --- AI knobs (legendary + human-ish) ---
+const SOFT_RANDOM = 0.12;         // small randomness to avoid same pattern
+const SAFETY_SPACE_FACTOR = 0.65; // keep enough free space near head
+const GREED = 1.0;                // higher = more aggressive for food
+
+// --- HUMAN SMOOTH SPEED ---
+const BASE_STEP_MS = 85;     // average time per tile
+const STEP_JITTER_MS = 18;   // random timing variation (human feel)
+const TURN_PENALTY_MS = 9;   // tiny hesitation on turns
+const EAT_PENALTY_MS = 22;   // tiny hesitation on eating
+const LENGTH_SLOWDOWN_MS = 28; // slows slightly as snake gets long
+
+let tilesX = 0, tilesY = 0;
+let snake = []; // [{x,y}]
+let prevSnake = []; // previous logic state for smooth interpolation
+let food = null;
+let score = 0;
+
+let stepMs = BASE_STEP_MS;
+let accumMs = 0;
+let lastFrameMs = 0;
+let lastMoveDir = {x: 0, y: -1};
+
+function k(x,y){ return x + "," + y; }
+function inBounds(x,y){ return x>=0 && y>=0 && x<tilesX && y<tilesY; }
+function lerp(a,b,t){ return a + (b-a) * t; }
+function clamp01(t){ return t < 0 ? 0 : (t > 1 ? 1 : t); }
+function randRange(min, max){ return min + Math.random() * (max - min); }
+
+function resize(){
+  const maxX = Math.floor(innerWidth / TILE);
+  const maxY = Math.floor(innerHeight / TILE);
+  tilesX = Math.max(10, maxX - (maxX % 2)); // even
+  tilesY = Math.max(10, maxY - (maxY % 2)); // even
+  canvas.width = tilesX * TILE;
+  canvas.height = tilesY * TILE;
+  uiBoard.innerText = tilesX + "×" + tilesY;
+}
+window.addEventListener("resize", () => { resize(); reset(); });
+resize();
+
+function reset(){
+  const mx = Math.floor(tilesX/2);
+  const my = Math.floor(tilesY/2);
+  snake = [{x:mx, y:my}, {x:mx, y:my+1}, {x:mx, y:my+2}];
+  prevSnake = snake.map(s => ({x:s.x, y:s.y}));
+  lastMoveDir = {x: 0, y: -1};
+  stepMs = BASE_STEP_MS;
+  accumMs = 0;
+  lastFrameMs = 0;
+  score = 0;
+  uiScore.innerText = score;
+  spawnFood();
+  uiMode.innerText = "HUNTING";
+  uiMode.style.color = "#00ff88";
+}
+
+function spawnFood(){
+  // Win condition (filled board)
+  if (snake.length >= tilesX * tilesY) {
+    uiMode.innerText = "LEGENDARY WIN";
+    uiMode.style.color = "#00e5ff";
+    return;
+  }
+
+  let valid = false;
+  let tries = 0;
+  while(!valid && tries < 5000){
+    food = { x: (Math.random()*tilesX)|0, y: (Math.random()*tilesY)|0 };
+    valid = !snake.some(s => s.x === food.x && s.y === food.y);
+    tries++;
+  }
+}
+
+// --- BFS utilities (fast + stable) ---
+function bfsNextStep(start, target, blockedSet){
+  // Returns next step {x,y} on shortest path, or null.
+  const qx = new Int32Array(tilesX * tilesY);
+  const qy = new Int32Array(tilesX * tilesY);
+  let qh = 0, qt = 0;
+
+  const visited = new Int8Array(tilesX * tilesY);
+  const parent = new Int32Array(tilesX * tilesY);
+  parent.fill(-1);
+
+  const sid = start.y * tilesX + start.x;
+  visited[sid] = 1;
+  qx[qt] = start.x; qy[qt] = start.y; qt++;
+
+  const dirs = [
+    [0,-1],[0,1],[-1,0],[1,0]
+  ];
+
+  while(qh < qt){
+    const cx = qx[qh], cy = qy[qh]; qh++;
+    if (cx === target.x && cy === target.y) break;
+
+    // light shuffle for "human" look
+    if (Math.random() < 0.25) dirs.reverse();
+
+    for (let i=0;i<4;i++){
+      const nx = cx + dirs[i][0];
+      const ny = cy + dirs[i][1];
+      if (!inBounds(nx,ny)) continue;
+      const id = ny * tilesX + nx;
+      if (visited[id]) continue;
+      if (blockedSet.has(k(nx,ny))) continue;
+      visited[id] = 1;
+      parent[id] = cy * tilesX + cx;
+      qx[qt] = nx; qy[qt] = ny; qt++;
+    }
+  }
+
+  const tid = target.y * tilesX + target.x;
+  if (!visited[tid]) return null;
+
+  // walk back from target to start to get the next step
+  let cur = tid;
+  let prev = parent[cur];
+  while (prev !== -1 && prev !== (start.y * tilesX + start.x)) {
+    cur = prev;
+    prev = parent[cur];
+  }
+  const nx = cur % tilesX;
+  const ny = (cur / tilesX) | 0;
+  return {x:nx, y:ny};
+}
+
+function floodFillCount(start, blockedSet){
+  // Counts reachable free cells from start (including start if free).
+  const qx = new Int32Array(tilesX * tilesY);
+  const qy = new Int32Array(tilesX * tilesY);
+  let qh = 0, qt = 0;
+  const visited = new Int8Array(tilesX * tilesY);
+
+  const sid = start.y * tilesX + start.x;
+  if (blockedSet.has(k(start.x,start.y))) return 0;
+  visited[sid] = 1;
+  qx[qt] = start.x; qy[qt] = start.y; qt++;
+  let count = 0;
+
+  const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
+  while(qh < qt){
+    const cx = qx[qh], cy = qy[qh]; qh++;
+    count++;
+    for (let i=0;i<4;i++){
+      const nx = cx + dirs[i][0];
+      const ny = cy + dirs[i][1];
+      if (!inBounds(nx,ny)) continue;
+      const id = ny * tilesX + nx;
+      if (visited[id]) continue;
+      if (blockedSet.has(k(nx,ny))) continue;
+      visited[id] = 1;
+      qx[qt] = nx; qy[qt] = ny; qt++;
+    }
+  }
+  return count;
+}
+
+function think(){
+  if (!food) return null;
+  if (snake.length >= tilesX * tilesY) return null;
+
+  const head = snake[0];
+  const tail = snake[snake.length - 1];
+  const dirs = [
+    {x:0,y:-1},
+    {x:0,y:1},
+    {x:-1,y:0},
+    {x:1,y:0},
+  ];
+
+  // Precompute body sets for collision checks
+  const bodySet = new Set(snake.map(s => k(s.x,s.y)));
+
+  // Candidate evaluation with full safety simulation
+  let best = null;
+  let bestScore = -Infinity;
+
+  for (const d of dirs){
+    const nx = head.x + d.x;
+    const ny = head.y + d.y;
+    if (!inBounds(nx,ny)) continue;
+
+    const willEat = (nx === food.x && ny === food.y);
+
+    // collision: allow stepping onto current tail ONLY if not eating (tail moves away)
+    const hits = bodySet.has(k(nx,ny)) && !( !willEat && nx === tail.x && ny === tail.y );
+    if (hits) continue;
+
+    // Build virtual snake after move
+    const vSnake = [{x:nx,y:ny}, ...snake];
+    if (!willEat) vSnake.pop();
+
+    const vHead = vSnake[0];
+    const vTail = vSnake[vSnake.length - 1];
+
+    // Blocked for path checks = body excluding tail (tail is reachable because it moves)
+    const blocked = new Set(vSnake.slice(0, vSnake.length - 1).map(s => k(s.x,s.y)));
+
+    // Safety 1: must have an escape path to tail (prevents dead-ends)
+    const escapeStep = bfsNextStep(vHead, vTail, blocked);
+    if (!escapeStep && vSnake.length > 4) continue;
+
+    // Safety 2: flood-fill space must be "enough" near head
+    const freeSpace = floodFillCount(vHead, blocked);
+    const needSpace = Math.max(10, Math.floor(vSnake.length * SAFETY_SPACE_FACTOR));
+    if (freeSpace < needSpace) continue;
+
+    // Aggression: prefer moves that shorten path to food, but only if safe
+    const blockedForFood = new Set(vSnake.slice(0, vSnake.length - 1).map(s => k(s.x,s.y)));
+    const toFoodStep = bfsNextStep(vHead, food, blockedForFood);
+
+    // Scoring
+    const distFood = Math.abs(vHead.x - food.x) + Math.abs(vHead.y - food.y);
+    const distTail = Math.abs(vHead.x - vTail.x) + Math.abs(vHead.y - vTail.y);
+    let s = 0;
+    if (willEat) s += 100000;
+    if (toFoodStep) s += 2500 * GREED;
+    s += (freeSpace * 3);
+    s -= distFood * (12 * GREED);
+    s += distTail * 0.25; // slight bias to keep tail accessible
+    s += (Math.random() - 0.5) * (SOFT_RANDOM * 100); // human-like jitter
+
+    if (s > bestScore) {
+      bestScore = s;
+      best = {x:nx, y:ny, willEat, hasFoodPath: !!toFoodStep};
+    }
+  }
+
+  if (best) {
+    uiMode.innerText = best.willEat ? "FINISHING" : (best.hasFoodPath ? "HUNTING" : "CONTROL");
+    uiMode.style.color = best.willEat ? "#00e5ff" : (best.hasFoodPath ? "#00ff88" : "#ffd000");
+    return {x:best.x, y:best.y};
+  }
+
+  // No "perfect" candidate found: pick any legal move that maximizes space (no-death fallback)
+  uiMode.innerText = "SURVIVAL";
+  uiMode.style.color = "#ff0055";
+
+  let fallback = null;
+  let fbScore = -Infinity;
+  for (const d of dirs){
+    const nx = head.x + d.x;
+    const ny = head.y + d.y;
+    if (!inBounds(nx,ny)) continue;
+    const willEat = (nx === food.x && ny === food.y);
+    const hits = bodySet.has(k(nx,ny)) && !( !willEat && nx === tail.x && ny === tail.y );
+    if (hits) continue;
+
+    const vSnake = [{x:nx,y:ny}, ...snake];
+    if (!willEat) vSnake.pop();
+    const blocked = new Set(vSnake.slice(0, vSnake.length - 1).map(s => k(s.x,s.y)));
+    const freeSpace = floodFillCount(vSnake[0], blocked);
+    const escapeStep = bfsNextStep(vSnake[0], vSnake[vSnake.length-1], blocked);
+    let s = freeSpace + (escapeStep ? 500 : 0) + (willEat ? 2000 : 0);
+    s += (Math.random() - 0.5) * 5;
+    if (s > fbScore) { fbScore = s; fallback = {x:nx,y:ny}; }
+  }
+  return fallback;
+}
+
+function logicStep(){
+  // if won, stop moving
+  if (snake.length >= tilesX * tilesY) return;
+
+  prevSnake = snake.map(s => ({x:s.x, y:s.y}));
+
+  const next = think();
+  if (!next) { reset(); return; }
+
+  const head = prevSnake[0];
+  const moveDir = { x: next.x - head.x, y: next.y - head.y };
+  const turned = (moveDir.x !== lastMoveDir.x || moveDir.y !== lastMoveDir.y);
+
+  snake.unshift({x: next.x, y: next.y});
+  const ate = (food && next.x === food.x && next.y === food.y);
+  if (ate) {
+    score++;
+    uiScore.innerText = score;
+    spawnFood();
+  } else {
+    snake.pop();
+  }
+
+  lastMoveDir = moveDir;
+  const slowByLength = (snake.length / (tilesX * tilesY)) * LENGTH_SLOWDOWN_MS;
+  stepMs =
+    BASE_STEP_MS +
+    randRange(-STEP_JITTER_MS, STEP_JITTER_MS) +
+    (turned ? TURN_PENALTY_MS : 0) +
+    (ate ? EAT_PENALTY_MS : 0) +
+    slowByLength;
+}
+
+function draw(alpha){
+  const t = clamp01(alpha);
+  ctx.fillStyle = "#050505";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Food
+  if (food) {
+    ctx.fillStyle = "#ff0055";
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = "#ff0055";
+    ctx.beginPath();
+    ctx.arc(food.x*TILE + TILE/2, food.y*TILE + TILE/2, TILE/3, 0, Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  // Snake
+  for (let i=0; i<snake.length; i++){
+    const s1 = snake[i];
+    const s0 = prevSnake[i] || prevSnake[prevSnake.length - 1] || s1;
+    const fx = lerp(s0.x, s1.x, t);
+    const fy = lerp(s0.y, s1.y, t);
+    const light = 50 - (i/snake.length)*30;
+    const color = i === 0 ? "#ffffff" : `hsl(150, 100%, ${light}%)`;
+    ctx.fillStyle = color;
+    if (i === 0) {
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = "#00ff88";
+    } else {
+      ctx.shadowBlur = 0;
+    }
+    ctx.fillRect(fx*TILE + 1, fy*TILE + 1, TILE - 2, TILE - 2);
+  }
+  ctx.shadowBlur = 0;
+}
+
+function frame(ts){
+  if (!lastFrameMs) lastFrameMs = ts;
+  const dt = Math.min(80, ts - lastFrameMs); // cap large tab-switch spikes
+  lastFrameMs = ts;
+  accumMs += dt;
+
+  while (accumMs >= stepMs) {
+    logicStep();
+    accumMs -= stepMs;
+  }
+
+  const alpha = stepMs > 0 ? (accumMs / stepMs) : 1;
+  draw(alpha);
+  requestAnimationFrame(frame);
+}
+
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
+
